@@ -1,35 +1,46 @@
 from flask import Flask, request, jsonify
+import os
+import tempfile
 import subprocess
 
 app = Flask(__name__)
 
 # Endpoint para receber hashes
 @app.route('/crack', methods=['POST'])
+
+
 def crack_hash():
-    # Recebe o hash do corpo da requisição
-    data = request.json
-    hash_to_crack = data.get('hash')
+    hashcat_dir = r"C:\Users\Public\Documents\ServidorCORE\hashcat-6.2.6"  # Ajuste este caminho!
+    hash_to_crack = "5f4dcc3b5aa765d61d8327deb882cf99"  # Exemplo
 
-    if not hash_to_crack:
-        return jsonify({"error": "Hash not provided"}), 400
+    if not os.path.exists(os.path.join(hashcat_dir, "OpenCL")):
+        return jsonify({"error": "Pasta OpenCL não encontrada!"}), 500
 
-    # Salva o hash em um arquivo temporário
-    with open('hash.txt', 'w') as f:
-        f.write(hash_to_crack)
-
-    # Executa o Hashcat (exemplo com MD5 e rockyou.txt)
     try:
+        hashcat_cmd = [
+            os.path.join(hashcat_dir, "hashcat.exe"),
+            "-m", "0",
+            "-a", "0",
+            "--potfile-disable",
+            "--force",  # Ignora erros de GPU/OpenCL
+            "-D", "1",  # Usa CPU (opcional)
+            hash_to_crack,
+            os.path.join(hashcat_dir, "wordlist", "rockyou.list")
+        ]
+
         result = subprocess.run(
-            ['C:\\Users\\Utilizador\\Downloads\\hashcat-6.2.6\\hashcat.exe', '-m', '0', '-a', '0', 'hash.txt', 'rockyou.txt', '--show'],
-            capture_output=True, text=True
+            hashcat_cmd,
+            cwd=hashcat_dir,  # ⚠️ Diretório crítico!
+            capture_output=True,
+            text=True,
+            timeout=300
         )
 
-        # Verifica se o hash foi decifrado
-        if result.returncode == 0 and result.stdout:
-            password = result.stdout.split(':')[-1].strip()
-            return jsonify({"hash": hash_to_crack, "password": password, "status": "cracked"})
+        if "cracked" in result.stdout:
+            return jsonify({"status": "success", "password": result.stdout.split(":")[-1]})
         else:
-            return jsonify({"hash": hash_to_crack, "password": None, "status": "not cracked"})
+            return jsonify({"status": "failed", "error": result.stderr})
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
