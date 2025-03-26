@@ -1,51 +1,82 @@
 from flask import Flask, request, jsonify
 import os
-import tempfile
 import subprocess
 
 app = Flask(__name__)
 
-# Endpoint para receber hashes
 @app.route('/crack', methods=['POST'])
-
-
 def crack_hash():
-    hashcat_dir = r"C:\Users\Public\Documents\ServidorCORE\hashcat-6.2.6"  # Ajuste este caminho!
-    hash_to_crack = "5f4dcc3b5aa765d61d8327deb882cf99"  # Exemplo
+    # 1. Receber a hash da requisição
+    data = request.get_json()
+    if not data or 'hash' not in data:
+        return jsonify({"error": "Hash não fornecida"}), 400
 
-    if not os.path.exists(os.path.join(hashcat_dir, "OpenCL")):
-        return jsonify({"error": "Pasta OpenCL não encontrada!"}), 500
+    hash_to_crack = data['hash']
+
+    # 2. Configurar paths
+    hashcat_dir = r"C:\Users\Public\Documents\ServidorCORE\hashcat-6.2.6"
+    wordlist_path = os.path.join(hashcat_dir, "wordlist", "rockyou.list")
+    hash_file_path = os.path.join(hashcat_dir, "hashToCrack.txt")
+    output_file = os.path.join(hashcat_dir, "cracked.txt")
 
     try:
+        # 3. Escrever a hash no arquivo hashToCrack.txt
+        with open(hash_file_path, 'w') as f:
+            f.write(hash_to_crack)
+
+        # 4. Comando Hashcat
         hashcat_cmd = [
             os.path.join(hashcat_dir, "hashcat.exe"),
-            "-m", "0",
-            "-a", "0",
+            "-m", "0",              # MD5
+            "-a", "0",              # Ataque de dicionário
+            hash_file_path,
+            wordlist_path,
+            "-o", output_file,
             "--potfile-disable",
-            "--force",  # Ignora erros de GPU/OpenCL
-            "-D", "1",  # Usa CPU (opcional)
-            hash_to_crack,
-            os.path.join(hashcat_dir, "wordlist", "rockyou.list")
+            "--force",
+            "-O",
+            "-w", "3"
+           # "--outfile-format=2"     # Garante que só a senha será output
         ]
 
+        # 5. Executar Hashcat
         result = subprocess.run(
             hashcat_cmd,
-            cwd=hashcat_dir,  # ⚠️ Diretório crítico!
+            cwd=hashcat_dir,
             capture_output=True,
             text=True,
-            timeout=300
+            timeout=600
         )
 
-        if "cracked" in result.stdout:
-            return jsonify({"status": "success", "password": result.stdout.split(":")[-1]})
-        else:
-            return jsonify({"status": "failed", "error": result.stderr})
+        # 6. Processar resultados
+        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+            with open(output_file, 'r') as f:
+                cracked_password = f.read().strip()
+                if cracked_password:
+                    return jsonify({
+                        "status": "success",
+                        "password": cracked_password
+                    })
 
+        return jsonify({
+            "status": "failed",
+            "error": "Hash não encontrada na wordlist",
+            "hashcat_output": result.stdout,
+            "hashcat_error": result.stderr
+        })
+
+    except subprocess.TimeoutExpired:
+        return jsonify({"status": "failed", "error": "Timeout excedido"}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        # Limpar arquivos
+        for file_path in [hash_file_path, output_file]:
+            if os.path.exists(file_path):
+                try:
+                    os.unlink(file_path)
+                except:
+                    pass
 
-# Inicia o servidor
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
-
-
