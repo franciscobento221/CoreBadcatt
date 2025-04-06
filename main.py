@@ -1,241 +1,257 @@
 from flask import Flask, request, jsonify
 import os
 import subprocess
+import threading
+import queue
+import uuid
+from datetime import datetime
 
 app = Flask(__name__)
 
-@app.route('/crack', methods=['POST'])
-def crack_hash():
-    # 1. Receber a hash da requisição
-    data = request.get_json()
-    if not data or 'hash' not in data:
-        return jsonify({"error": "Hash não fornecida"}), 400
+# Configuration
+HASHCAT_DIR = r"C:\Users\Public\Documents\ServidorCORE\hashcat-6.2.6"
+WORDLIST_PATH = os.path.join(HASHCAT_DIR, "wordlist", "rockyou.list")
+RULE_FILE = os.path.join(HASHCAT_DIR, "rules", "OneRuleToRuleThemAll.rule")
+CRACKED_PASSWORDS_FILE = os.path.join(HASHCAT_DIR, "all_cracked_hashes.txt")
 
-    hash_to_crack = data['hash']
-    print(f"\n[+] Nova requisição recebida - Hash: {hash_to_crack}")
 
-    # 2. Configurar paths
-    hashcat_dir = r"C:\Users\Public\Documents\ServidorCORE\hashcat-6.2.6"
-    wordlist_path = os.path.join(hashcat_dir, "wordlist", "rockyou.list")
-    hash_file_path = os.path.join(hashcat_dir, "hashToCrack.txt")
-    output_file = os.path.join(hashcat_dir, "cracked.txt")
-    rule_file = os.path.join(hashcat_dir, "rules", "OneRuleToRuleThemAll.rule")
+# Task queue and processing system
+task_queue = queue.Queue()
+processing_lock = threading.Lock()
+active_tasks = {}
 
-    try:
-        # 3. Escrever a hash no arquivo hashToCrack.txt
-        print(f"[+] Gravando hash no arquivo {hash_file_path}")
-        with open(hash_file_path, 'w') as f:
-            f.write(hash_to_crack)
 
-        # 4. Comando Hashcat
-        hashcat_cmd = [
-            os.path.join(hashcat_dir, "hashcat.exe"),
-            "-m", "0",  # MD5
-            "-a", "0",  # Ataque de dicionário
-            hash_file_path,
-            wordlist_path,
-            "-r", rule_file,
-            "-o", output_file,
-            "--potfile-disable",
-            "--force",
-            "-O",
-            "-w", "3",
-            "--status",  # Ativa updates de status
-            "--status-timer=10",  # Atualiza status a cada 10 segundos
-            "--machine-readable"  # Formato legível para parsing
-        ]
+class HashcatTask:
+    def __init__(self, file_path, original_filename):
+        self.task_id = str(uuid.uuid4())
+        self.file_path = file_path
+        self.original_filename = original_filename
+        self.status = "queued"
+        self.start_time = None
+        self.end_time = None
+        self.result = None
+        self.output_file = os.path.join(HASHCAT_DIR, f"cracked_{self.task_id}.txt")
+        self.current_hash = None
+        self.hashes = []
 
-        print("[+] Comando Hashcat preparado:")
-        print(" ".join(hashcat_cmd))
+        # Read and log all hashes when task is created
+        with open(file_path, 'r') as f:
+            self.hashes = [line.strip() for line in f if line.strip()]
+        print(f"\n[+++] New Task {self.task_id} - {len(self.hashes)} hashes from {original_filename}")
+        for i, hash in enumerate(self.hashes, 1):
+            print(f"  Hash {i}: {hash}")
 
-        # 5. Executar Hashcat
-        print("[+] Iniciando processo Hashcat...")
-        result = subprocess.run(
-            hashcat_cmd,
-            cwd=hashcat_dir,
-            capture_output=True,
-            text=True,
-            timeout=600
-        )
 
-        # Debug: Exibir saídas do Hashcat
-        print("\n[DEBUG] Saída do Hashcat (stdout):")
-        print(result.stdout)
-        print("\n[DEBUG] Erros do Hashcat (stderr):")
-        print(result.stderr)
+def process_tasks():
+    while True:
+        task = task_queue.get()
+        with processing_lock:
+            active_tasks[task.task_id] = task
 
-        # 6. Processar resultados
-        print(f"\n[+] Verificando arquivo de resultados: {output_file}")
-        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
-            with open(output_file, 'r') as f:
-                content = f.read().strip()
-                print(f"[+] Conteúdo do arquivo cracked.txt: '{content}'")
+        try:
+            task.status = "processing"
+            task.start_time = datetime.now()
+            print(f"\n[===] Starting processing for Task {task.task_id} - {task.original_filename}")
 
-                # Processar diferentes formatos de saída
-                if ':' in content:  # Formato hash:senha
-                    cracked_password = content.split(':')[-1].strip()
-                else:  # Formato apenas senha
-                    cracked_password = content
+            # Create a temporary file for each hash to track current progress
+            temp_hash_file = os.path.join(HASHCAT_DIR, f"current_hash_{task.task_id}.txt")
 
-                if cracked_password:
-                    print(f"[+] Senha encontrada: {cracked_password}")
-                    return jsonify({
-                        "status": "success",
-                        "password": cracked_password
-                    })
+            # Process each hash one by one
+            for i, current_hash in enumerate(task.hashes, 1):
+                task.current_hash = current_hash
+                print(f"\n[>>>] Processing hash {i}/{len(task.hashes)}: {current_hash}")
 
-        print("[!] Hash não foi decifrada")
-        return jsonify({
-            "status": "failed",
-            "error": "Hash não encontrada na wordlist",
-            "hashcat_output": result.stdout,
-            "hashcat_error": result.stderr
-        })
+                # Write current hash to temp file
+                with open(temp_hash_file, 'w') as f:
+                    f.write(current_hash)
 
-    except subprocess.TimeoutExpired:
-        print("[!] Timeout excedido (10 minutos)")
-        return jsonify({"status": "failed", "error": "Timeout excedido"}), 500
-    except Exception as e:
-        print(f"[!] Erro inesperado: {str(e)}")
-        return jsonify({"error": str(e)}), 500
-    finally:
-        # Limpar arquivos
-        print("\n[+] Limpando arquivos temporários...")
-        for file_path in [hash_file_path, output_file]:
-            if os.path.exists(file_path):
-                try:
-                    os.unlink(file_path)
-                    print(f"    - Removido: {file_path}")
-                except Exception as e:
-                    print(f"    - Erro ao remover {file_path}: {str(e)}")
-        print("[+] Processo finalizado\n")
+                # Run hashcat for this single hash
+                hashcat_cmd = [
+                    os.path.join(HASHCAT_DIR, "hashcat.exe"),
+                    "-m", "0",
+                    "-a", "0",
+                    temp_hash_file,
+                    WORDLIST_PATH,
+                    "-r", RULE_FILE,
+                    "-o", task.output_file,
+                    "--potfile-disable",
+                    "--force",
+                    "-O",
+                    "-w", "3",
+                    "--status",
+                    "--status-timer=5",  # More frequent updates
+                    "--machine-readable"
+                ]
+
+                # Run hashcat with stdout/stderr capture
+                process = subprocess.Popen(
+                    hashcat_cmd,
+                    cwd=HASHCAT_DIR,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+
+                # Monitor hashcat output in real-time
+                while True:
+                    output = process.stdout.readline()
+                    if output == '' and process.poll() is not None:
+                        break
+                    if output:
+                        print(f"  Hashcat: {output.strip()}")
+                        if "Status...........: Cracked" in output:
+                            print(f"  [!!!] CRACKED: {current_hash}")
+
+                # Check if hash was cracked
+                if os.path.exists(task.output_file) and os.path.getsize(task.output_file) > 0:
+                    with open(task.output_file, 'r') as f:
+                        # Read all lines and get the last non-empty line
+                        lines = [line.strip() for line in f if line.strip()]
+                        if lines:  # Only proceed if there are any lines
+                            result = lines[-1]  # Get the last line
+                            print(f"  Cracked password: {result}")
+                            with open(CRACKED_PASSWORDS_FILE, 'a') as crackedFile:
+                                crackedFile.write(result + '\n')
+
+            # Final results processing
+            final_results = []
+            if os.path.exists(task.output_file) and os.path.getsize(task.output_file) > 0:
+                with open(task.output_file, 'r') as f:
+                    cracked_passwords = [line.strip() for line in f if line.strip()]
+
+                for hash, password in zip(task.hashes, cracked_passwords):
+                    if password:  # Only include successfully cracked hashes
+                        final_results.append({
+                            "hash": hash,
+                            "password": password
+                        })
+
+            task.result = {
+                "status": "completed",
+                "cracked_count": len(final_results),
+                "total_hashes": len(task.hashes),
+                "results": final_results
+            }
+
+        except Exception as e:
+            print(f"[!!!] Error processing task {task.task_id}: {str(e)}")
+            task.result = {
+                "status": "failed",
+                "error": str(e)
+            }
+        finally:
+            task.status = "completed"
+            task.end_time = datetime.now()
+            # Cleanup
+            for file_path in [task.file_path, task.output_file, temp_hash_file]:
+                if file_path and os.path.exists(file_path):
+                    try:
+                        os.unlink(file_path)
+                    except Exception as e:
+                        print(f"  Cleanup error for {file_path}: {str(e)}")
+            task_queue.task_done()
+            print(
+                f"\n[===] Completed Task {task.task_id} - Cracked {len(final_results) if 'final_results' in locals() else 0}/{len(task.hashes)} hashes")
+
+
+# Start worker thread
+worker_thread = threading.Thread(target=process_tasks, daemon=True)
+worker_thread.start()
+
 
 @app.route('/upload', methods=['POST'])
-def crack_hashFILE():
-    # 1. Check if file was uploaded
+def upload_file():
     if 'file' not in request.files:
         return jsonify({"error": "No file provided"}), 400
 
     uploaded_file = request.files['file']
-
     if uploaded_file.filename == '':
         return jsonify({"error": "No selected file"}), 400
 
     if not uploaded_file.filename.endswith('.txt'):
         return jsonify({"error": "Only .txt files are accepted"}), 400
 
-    # 2. Configurar paths
-    hashcat_dir = r"C:\Users\Public\Documents\ServidorCORE\hashcat-6.2.6"
-    wordlist_path = os.path.join(hashcat_dir, "wordlist", "rockyou.list")
-    hash_file_path = os.path.join(hashcat_dir, "hashesToCrack.txt")
-    output_file = os.path.join(hashcat_dir, "cracked.txt")
-    rule_file = os.path.join(hashcat_dir, "rules", "OneRuleToRuleThemAll.rule")
+    # Save uploaded file
+    file_path = os.path.join(HASHCAT_DIR, f"hashes_{str(uuid.uuid4())}.txt")
+    uploaded_file.save(file_path)
+    print(f"\n[+++] Received file {uploaded_file.filename} saved as {file_path}")
 
-    try:
-        # 3. Save uploaded file
-        uploaded_file.save(hash_file_path)
-        print(f"[+] Saved hashes file to {hash_file_path}")
+    # Create and queue task
+    task = HashcatTask(file_path, uploaded_file.filename)
+    task_queue.put(task)
+    active_tasks[task.task_id] = task
 
-        # Count number of hashes
-        with open(hash_file_path, 'r') as f:
-            hashes = [line.strip() for line in f if line.strip()]
-            num_hashes = len(hashes)
-            print(f"[+] Found {num_hashes} hashes to crack")
+    return jsonify({
+        "status": "queued",
+        "task_id": task.task_id,
+        "filename": uploaded_file.filename,
+        "total_hashes": len(task.hashes)
+    })
 
-        # 4. Comando Hashcat
-        hashcat_cmd = [
-            os.path.join(hashcat_dir, "hashcat.exe"),
-            "-m", "0",  # MD5
-            "-a", "0",  # Ataque de dicionário
-            hash_file_path,
-            wordlist_path,
-            "-r", rule_file,
-            "-o", output_file,
-            "--potfile-disable",
-            "--force",
-            "-O",
-            "-w", "3",
-            "--status",
-            "--status-timer=10",
-            "--machine-readable",
-            "--outfile-format=2"  # Only output passwords
+#@app.route('/cracked', methods=['GET'])
+#def get_cracked_hashes():
+#   """Endpoint to view all cracked hashes"""
+#    try:
+#        with open(CRACKED_FILE, 'r') as f:
+#            lines = [line.strip() for line in f if line.strip()]
+#            results = []
+#            for line in lines:
+#                if ':' in line:
+#                    hash, password = line.split(':', 1)
+#                    results.append({"hash": hash, "password": password})
+
+#        return jsonify({
+ #           "status": "success",
+  #          "count": len(results),
+   #         "results": results
+    #    })
+    #except Exception as e:
+     #   return jsonify({"error": str(e)}), 500
+
+@app.route('/status/<task_id>', methods=['GET'])
+def get_status(task_id):
+    with processing_lock:
+        task = active_tasks.get(task_id)
+
+    if not task:
+        return jsonify({"error": "Task not found"}), 404
+
+    response = {
+        "task_id": task_id,
+        "filename": task.original_filename,
+        "status": task.status,
+        "start_time": task.start_time.isoformat() if task.start_time else None,
+        "end_time": task.end_time.isoformat() if task.end_time else None
+    }
+
+    if task.status == "completed":
+        response.update(task.result)
+
+    return jsonify(response)
+
+
+@app.route('/queue', methods=['GET'])
+def get_queue():
+    with processing_lock:
+        queue_status = {
+            "pending": task_queue.qsize(),
+            "active": len([t for t in active_tasks.values() if t.status == "processing"]),
+            "completed": len([t for t in active_tasks.values() if t.status == "completed"])
+        }
+        tasks = [
+            {
+                "task_id": t.task_id,
+                "filename": t.original_filename,
+                "status": t.status
+            } for t in active_tasks.values()
         ]
 
-        print("[+] Comando Hashcat preparado:")
-        print(" ".join(hashcat_cmd))
+    return jsonify({
+        "queue_status": queue_status,
+        "tasks": tasks
+    })
 
-        # 5. Executar Hashcat
-        print("[+] Iniciando processo Hashcat...")
-        result = subprocess.run(
-            hashcat_cmd,
-            cwd=hashcat_dir,
-            capture_output=True,
-            text=True,
-            timeout=3600  # Increased timeout to 1 hour for multiple hashes
-        )
-
-        # Debug: Exibir saídas do Hashcat
-        print("\n[DEBUG] Saída do Hashcat (stdout):")
-        print(result.stdout)
-        print("\n[DEBUG] Erros do Hashcat (stderr):")
-        print(result.stderr)
-
-        # 6. Processar resultados
-        print(f"\n[+] Verificando arquivo de resultados: {output_file}")
-        results = []
-        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
-            with open(output_file, 'r') as f:
-                cracked_passwords = [line.strip() for line in f if line.strip()]
-
-                # Read original hashes file to match results
-                with open(hash_file_path, 'r') as hf:
-                    original_hashes = [line.strip() for line in hf if line.strip()]
-
-                # Pair hashes with passwords (assuming order is preserved)
-                for i, password in enumerate(cracked_passwords):
-                    if i < len(original_hashes):
-                        results.append({
-                            "hash": original_hashes[i],
-                            "password": password
-                        })
-
-            if results:
-                print(f"[+] Found {len(results)} cracked passwords")
-                return jsonify({
-                    "status": "success",
-                    "cracked_count": len(results),
-                    "total_hashes": num_hashes,
-                    "results": results
-                })
-
-        print("[!] No hashes were cracked")
-        return jsonify({
-            "status": "failed",
-            "error": "No hashes were cracked",
-            "hashcat_output": result.stdout,
-            "hashcat_error": result.stderr,
-            "total_hashes": num_hashes,
-            "cracked_count": 0
-        })
-
-    except subprocess.TimeoutExpired:
-        print("[!] Timeout excedido (60 minutos)")
-        return jsonify({"status": "failed", "error": "Timeout excedido"}), 500
-    except Exception as e:
-        print(f"[!] Erro inesperado: {str(e)}")
-        return jsonify({"error": str(e)}), 500
-    finally:
-        # Limpar arquivos
-        print("\n[+] Limpando arquivos temporários...")
-        for file_path in [hash_file_path]:
-
-            if os.path.exists(file_path):
-                try:
-                    os.unlink(file_path)
-                    print(f"    - Removido: {file_path}")
-                except Exception as e:
-                    print(f"    - Erro ao remover {file_path}: {str(e)}")
-        print("[+] Processo finalizado\n")
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    #print(f"[***] Starting Hashcat Server - All cracked hashes will be saved to {CRACKED_FILE}")
+    app.run(host='0.0.0.0', port=5000, threaded=True)
