@@ -10,7 +10,7 @@ app = Flask(__name__)
 
 # Configuration
 HASHCAT_DIR = r"C:\Users\Public\Documents\ServidorCORE\hashcat-6.2.6"
-WORDLIST_PATH = os.path.join(HASHCAT_DIR, "wordlist", "rockyou.list")
+WORDLIST_PATH = os.path.join(HASHCAT_DIR, "wordlist", "weakpass_4.txt")
 RULE_FILE = os.path.join(HASHCAT_DIR, "rules", "OneRuleToRuleThemAll.rule")
 CRACKED_PASSWORDS_FILE = os.path.join(HASHCAT_DIR, "all_cracked_hashes.txt")
 
@@ -37,7 +37,7 @@ class HashcatTask:
         # Read and log all hashes when task is created
         with open(file_path, 'r') as f:
             self.hashes = [line.strip() for line in f if line.strip()]
-        print(f"\n[+++] New Task {self.task_id} - {len(self.hashes)} hashes from {original_filename}")
+        print(f"\n[+++] {len(self.hashes)} hashes from {original_filename}")
         for i, hash in enumerate(self.hashes, 1):
             print(f"  Hash {i}: {hash}")
 
@@ -51,7 +51,7 @@ def process_tasks():
         try:
             task.status = "processing"
             task.start_time = datetime.now()
-            print(f"\n[===] Starting processing for Task {task.task_id} - {task.original_filename}")
+            print(f"\n[===] Starting processing - {task.original_filename}")
 
             # Create a temporary file for each hash to track current progress
             temp_hash_file = os.path.join(HASHCAT_DIR, f"current_hash_{task.task_id}.txt")
@@ -78,6 +78,8 @@ def process_tasks():
                     "--force",
                     "-O",
                     "-w", "3",
+                    "--username",
+                    "--outfile-format=3",
                     "--status",
                     "--status-timer=5",  # More frequent updates
                     "--machine-readable"
