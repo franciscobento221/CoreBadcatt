@@ -70,19 +70,18 @@ def process_tasks():
                     os.path.join(HASHCAT_DIR, "hashcat.exe"),
                     "-m", "0",
                     "-a", "0",
-                    temp_hash_file,
+                    "--username",  # Important for username handling
+                    temp_hash_file,  # Contains username:hash
                     WORDLIST_PATH,
                     "-r", RULE_FILE,
-                    "-o", task.output_file,
+                    "-o", task.output_file,  # Will contain username:hash:password
+                    "--outfile-format=3",  # username:hash:password format
                     "--potfile-disable",
                     "--force",
                     "-O",
                     "-w", "3",
-                    "--username",
-                    "--outfile-format=3",
                     "--status",
-                    "--status-timer=5",  # More frequent updates
-                    "--machine-readable"
+                    "--status-timer=5"
                 ]
 
                 # Run hashcat with stdout/stderr capture
