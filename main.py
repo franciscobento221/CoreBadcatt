@@ -59,6 +59,7 @@ def process_tasks():
             # Process each hash one by one
             for i, current_hash in enumerate(task.hashes, 1):
                 task.current_hash = current_hash
+                user = current_hash.split(":")[0]
                 print(f"\n[>>>] Processing hash {i}/{len(task.hashes)}: {current_hash}")
 
                 # Write current hash to temp file
@@ -75,7 +76,7 @@ def process_tasks():
                     WORDLIST_PATH,
                     "-r", RULE_FILE,
                     "-o", task.output_file,  # Will contain username:hash:password
-                    "--outfile-format=3",  # username:hash:password format
+                    "--outfile-format=2",  # username:hash:password format
                     "--potfile-disable",
                     "--force",
                     "-O",
@@ -112,7 +113,7 @@ def process_tasks():
                             result = lines[-1]  # Get the last line
                             print(f"  Cracked password: {result}")
                             with open(CRACKED_PASSWORDS_FILE, 'a') as crackedFile:
-                                crackedFile.write(result + '\n')
+                                crackedFile.write(user + ':' + result + '\n')
 
             # Final results processing
             final_results = []
