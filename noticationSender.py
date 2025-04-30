@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+import os
 #push
 
 app = Flask(__name__)
@@ -14,6 +15,9 @@ USERS = {
 
 
 }
+
+HASHCAT_DIR = r"C:\Users\Public\Documents\ServidorCORE\hashcat-6.2.6"
+CRACKED_PASSWORDS_FILE = os.path.join(HASHCAT_DIR, "all_cracked_hashes.txt")
 
 
 @app.route('/login', methods=['POST'])
@@ -31,6 +35,28 @@ def login():
         return jsonify({"status": "success", "role": user["role"]})
 
     return jsonify({"status": "fail", "message": "Invalid credentials"}), 401
+
+@app.route('/check', methods=['POST'])
+def check_cracked():
+    data = request.get_json()
+    username = data.get("username")
+
+    if not username:
+        return jsonify({"error": "Username is required"}), 400
+
+    try:
+        with open(CRACKED_PASSWORDS_FILE, "r") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                user, password = line.strip().split(":", 1)
+                if user == username:
+                    return jsonify({"status": "cracked", "password": password})
+    except FileNotFoundError:
+        return jsonify({"error": "Cracked password file not found"}), 500
+
+    return jsonify({"status": "not_cracked"})
+
 
 
 if __name__ == '__main__':

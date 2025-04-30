@@ -22,6 +22,7 @@ processing_lock = threading.Lock()
 active_tasks = {}
 
 
+
 class HashcatTask:
     def __init__(self, file_path, original_filename):
         self.task_id = str(uuid.uuid4())
