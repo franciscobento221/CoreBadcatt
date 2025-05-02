@@ -78,7 +78,7 @@ def process_tasks():
                     WORDLIST_PATH,
                     "-r", RULE_FILE,
                     "-o", task.output_file,  # Will contain username:hash:password
-                    "--outfile-format=2",  # username:hash:password format
+                    "--outfile-format=1",  # username:hash:password format
                     "--potfile-disable",
                     "--force",
                     "-O",
