@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 import os
 #push
-
+#teste push
 app = Flask(__name__)
 
 # Hardcoded users (username: {password, role})
