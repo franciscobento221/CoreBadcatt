@@ -11,8 +11,8 @@ app = Flask(__name__)
 
 # Configuration
 HASHCAT_DIR = r"C:\Users\Public\Documents\ServidorCORE\hashcat-6.2.6"
-WORDLIST_PATH = os.path.join(HASHCAT_DIR, "wordlist", "weakpass_4.txt")
-RULE_FILE = os.path.join(HASHCAT_DIR, "rules", "OneRuleToRuleThemAll.rule")
+WORDLIST_PATH = os.path.join(HASHCAT_DIR, "wordlist", "rockyou.list")
+RULE_FILE = os.path.join(HASHCAT_DIR, "rules", "best64.rule")
 CRACKED_PASSWORDS_FILE = os.path.join(HASHCAT_DIR, "all_cracked_hashes.txt")
 
 
@@ -21,6 +21,9 @@ task_queue = queue.Queue()
 processing_lock = threading.Lock()
 active_tasks = {}
 
+pending_files = []
+batch_lock = threading.Lock()
+BATCH_INTERVAL_SECONDS = 120  # 5 minutes
 
 
 class HashcatTask:
@@ -44,125 +47,6 @@ class HashcatTask:
             print(f"  Hash {i}: {hash}")
 
 
-def process_tasks():
-    while True:
-        task = task_queue.get()
-        with processing_lock:
-            active_tasks[task.task_id] = task
-
-        try:
-            task.status = "processing"
-            task.start_time = datetime.now()
-            print(f"\n[===] Starting processing - {task.original_filename}")
-
-            # Create a temporary file for each hash to track current progress
-            temp_hash_file = os.path.join(HASHCAT_DIR, f"current_hash_{task.task_id}.txt")
-
-            # Process each hash one by one
-            for i, current_hash in enumerate(task.hashes, 1):
-                task.current_hash = current_hash
-                user = current_hash.split(":")[0]
-                print(f"\n[>>>] Processing hash {i}/{len(task.hashes)}: {current_hash}")
-
-                # Write current hash to temp file
-                with open(temp_hash_file, 'w') as f:
-                    f.write(current_hash)
-
-                # Run hashcat for this single hash
-                hashcat_cmd = [
-                    os.path.join(HASHCAT_DIR, "hashcat.exe"),
-                    "-m", "0",
-                    "-a", "0",
-                    "--username",  # Important for username handling
-                    temp_hash_file,  # Contains username:hash
-                    WORDLIST_PATH,
-                    "-r", RULE_FILE,
-                    "-o", task.output_file,  # Will contain username:hash:password
-                    "--outfile-format=1",  # username:hash:password format
-                    "--potfile-disable",
-                    "--force",
-                    "-O",
-                    "-w", "3",
-                    "--status",
-                    "--status-timer=5"
-                ]
-
-                # Run hashcat with stdout/stderr capture
-                process = subprocess.Popen(
-                    hashcat_cmd,
-                    cwd=HASHCAT_DIR,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True
-                )
-
-                # Monitor hashcat output in real-time
-                while True:
-                    output = process.stdout.readline()
-                    if output == '' and process.poll() is not None:
-                        break
-                    if output:
-                        print(f"  Hashcat: {output.strip()}")
-                        if "Status...........: Cracked" in output:
-                            print(f"  [!!!] CRACKED: {current_hash}")
-
-                # Check if hash was cracked
-                if os.path.exists(task.output_file) and os.path.getsize(task.output_file) > 0:
-                    with open(task.output_file, 'r') as f:
-                        # Read all lines and get the last non-empty line
-                        lines = [line.strip() for line in f if line.strip()]
-                        if lines:  # Only proceed if there are any lines
-                            result = lines[-1]  # Get the last line
-                            print(f"  Cracked password: {result}")
-                            with open(CRACKED_PASSWORDS_FILE, 'a') as crackedFile:
-                                crackedFile.write(user + ':' + result + '\n')
-
-            # Final results processing
-            final_results = []
-            if os.path.exists(task.output_file) and os.path.getsize(task.output_file) > 0:
-                with open(task.output_file, 'r') as f:
-                    cracked_passwords = [line.strip() for line in f if line.strip()]
-
-                for hash, password in zip(task.hashes, cracked_passwords):
-                    if password:  # Only include successfully cracked hashes
-                        final_results.append({
-                            "hash": hash,
-                            "password": password
-                        })
-
-            task.result = {
-                "status": "completed",
-                "cracked_count": len(final_results),
-                "total_hashes": len(task.hashes),
-                "results": final_results
-            }
-
-        except Exception as e:
-            print(f"[!!!] Error processing task {task.task_id}: {str(e)}")
-            task.result = {
-                "status": "failed",
-                "error": str(e)
-            }
-        finally:
-            task.status = "completed"
-            task.end_time = datetime.now()
-            # Cleanup
-            for file_path in [task.file_path, task.output_file, temp_hash_file]:
-                if file_path and os.path.exists(file_path):
-                    try:
-                        os.unlink(file_path)
-                    except Exception as e:
-                        print(f"  Cleanup error for {file_path}: {str(e)}")
-            task_queue.task_done()
-            print(
-                f"\n[===] Completed Task {task.task_id} - Cracked {len(final_results) if 'final_results' in locals() else 0}/{len(task.hashes)} hashes")
-
-
-# Start worker thread
-worker_thread = threading.Thread(target=process_tasks, daemon=True)
-worker_thread.start()
-
-
 @app.route('/upload', methods=['POST'])
 def upload_file():
     if 'file' not in request.files:
@@ -175,42 +59,26 @@ def upload_file():
     if not uploaded_file.filename.endswith('.txt'):
         return jsonify({"error": "Only .txt files are accepted"}), 400
 
-    # Save uploaded file
+    # Save the uploaded file
     file_path = os.path.join(HASHCAT_DIR, f"hashes_{str(uuid.uuid4())}.txt")
     uploaded_file.save(file_path)
-    print(f"\n[+++] Received file {uploaded_file.filename} saved as {file_path}")
 
-    # Create and queue task
+    # Create task metadata (not yet processed)
     task = HashcatTask(file_path, uploaded_file.filename)
-    task_queue.put(task)
-    active_tasks[task.task_id] = task
 
+    with batch_lock:
+        pending_files.append(task)
+        active_tasks[task.task_id] = task
+
+    print(f"\n[+++] File queued for batch: {uploaded_file.filename}")
     return jsonify({
-        "status": "queued",
+        "status": "queued_for_batch",
         "task_id": task.task_id,
-        "filename": uploaded_file.filename,
-        "total_hashes": len(task.hashes)
+        "filename": uploaded_file.filename
     })
 
-#@app.route('/cracked', methods=['GET'])
-#def get_cracked_hashes():
-#   """Endpoint to view all cracked hashes"""
-#    try:
-#        with open(CRACKED_FILE, 'r') as f:
-#            lines = [line.strip() for line in f if line.strip()]
-#            results = []
-#            for line in lines:
-#                if ':' in line:
-#                    hash, password = line.split(':', 1)
-#                    results.append({"hash": hash, "password": password})
 
-#        return jsonify({
- #           "status": "success",
-  #          "count": len(results),
-   #         "results": results
-    #    })
-    #except Exception as e:
-     #   return jsonify({"error": str(e)}), 500
+
 
 @app.route('/status/<task_id>', methods=['GET'])
 def get_status(task_id):
@@ -255,7 +123,133 @@ def get_queue():
         "tasks": tasks
     })
 
+def batch_processor():
+    while True:
+        print("\n[***] Waiting for next batch window...")
+        threading.Event().wait(BATCH_INTERVAL_SECONDS)
+
+        with batch_lock:
+            if not pending_files:
+                print("[---] No files in this batch window.")
+                continue
+
+            batch_id = str(uuid.uuid4())
+            batch_input_file = os.path.join(HASHCAT_DIR, f"batch_input_{batch_id}.txt")
+            batch_output_file = os.path.join(HASHCAT_DIR, f"batch_output_{batch_id}.txt")
+            print(f"\n[===] Starting new batch with {len(pending_files)} files")
+            for task in pending_files:
+                print(f"\n[+] File: {task.original_filename}")
+                try:
+                    with open(task.file_path, 'r') as f:
+                        lines = [line.strip() for line in f if line.strip()]
+                        for i, h in enumerate(lines, 1):
+                            print(f"  Hash {i}: {h}")
+                except Exception as e:
+                    print(f"  [!] Could not read {task.file_path}: {e}")
+
+            combined_lines = []
+            for task in pending_files:
+                with open(task.file_path, 'r') as f:
+                    lines = [line.strip() for line in f if line.strip()]
+                    task.hashes = lines  # store for response
+                    combined_lines.extend(lines)
+
+            with open(batch_input_file, 'w') as f:
+                for line in combined_lines:
+                    f.write(line + "\n")
+
+            # Run hashcat
+            hashcat_cmd = [
+                os.path.join(HASHCAT_DIR, "hashcat.exe"),
+                "-m", "0",
+                "-a", "0",
+                "--username",
+                batch_input_file,
+                WORDLIST_PATH,
+                "-r", RULE_FILE,
+                "-o", CRACKED_PASSWORDS_FILE,
+                "--outfile-format=1",
+                "--potfile-disable",
+                "--force",
+                "-O",
+                "-w", "3",
+
+            ]
+
+            print(f"[***] Running hashcat on batch...")
+
+            try:
+                process = subprocess.Popen(
+                    hashcat_cmd,
+                    cwd=HASHCAT_DIR,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,  # Merge stdout and stderr
+                    text=True
+                )
+
+                while True:
+                    output = process.stdout.readline()
+                    if output == '' and process.poll() is not None:
+                        break
+                    if output:
+                        print(f"[hashcat] {output.strip()}")
+
+                if process.returncode != 0:
+                    print(f"[!!!] Hashcat exited with code {process.returncode}")
+                    for task in pending_files:
+                        task.status = "failed"
+                        task.result = {"status": "failed", "error": f"Hashcat exited with code {process.returncode}"}
+                    pending_files.clear()
+                    continue
+
+            except Exception as e:
+                print(f"[!!!] Exception running hashcat: {e}")
+                for task in pending_files:
+                    task.status = "failed"
+                    task.result = {"status": "failed", "error": str(e)}
+                pending_files.clear()
+                continue
+
+            # Parse cracked results
+            cracked_results = {}
+            if os.path.exists(batch_output_file):
+                with open(batch_output_file, 'r') as f:
+                    for line in f:
+                        if ':' in line:
+                            parts = line.strip().split(':')
+                            if len(parts) >= 3:
+                                email = parts[0]
+                                password = parts[-1]
+                                cracked_results[email] = password
+                                with open(CRACKED_PASSWORDS_FILE, 'a') as cfile:
+                                    cfile.write(f"{email}:{password}\n")
+
+            # Update task results
+            for task in pending_files:
+                cracked = []
+                for hash in task.hashes:
+                    email = hash.split(':')[0]
+                    if email in cracked_results:
+                        cracked.append({"hash": hash, "password": cracked_results[email]})
+
+                task.status = "completed"
+                task.end_time = datetime.now()
+                task.result = {
+                    "status": "completed",
+                    "cracked_count": len(cracked),
+                    "total_hashes": len(task.hashes),
+                    "results": cracked
+                }
+
+                # Clean up file
+                try:
+                    os.remove(task.file_path)
+                except Exception as e:
+                    print(f"[Cleanup Error] {e}")
+
+            pending_files.clear()
+            print(f"[===] Batch complete: {len(cracked_results)} cracked")
 
 if __name__ == '__main__':
-    #print(f"[***] Starting Hashcat Server - All cracked hashes will be saved to {CRACKED_FILE}")
+    threading.Thread(target=batch_processor, daemon=True).start()
     app.run(host='0.0.0.0', port=5000, threaded=True)
