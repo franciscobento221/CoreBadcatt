@@ -49,7 +49,12 @@ def check_cracked():
             for line in f:
                 if not line.strip():
                     continue
-                user, password = line.strip().split(":", 1)
+                parts = line.strip().split(":", 1)
+                if len(parts) != 2:
+                    continue  # skip malformed lines
+                user = parts[0]
+                hash_val = parts[1]
+
                 if user == username:
                     return jsonify({"status": "cracked", "password": password})
     except FileNotFoundError:

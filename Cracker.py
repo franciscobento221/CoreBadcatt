@@ -137,6 +137,8 @@ def batch_processor():
             batch_input_file = os.path.join(HASHCAT_DIR, f"batch_input_{batch_id}.txt")
             batch_output_file = os.path.join(HASHCAT_DIR, f"batch_output_{batch_id}.txt")
             print(f"\n[===] Starting new batch with {len(pending_files)} files")
+
+            combined_lines = []
             for task in pending_files:
                 print(f"\n[+] File: {task.original_filename}")
                 try:
@@ -144,15 +146,10 @@ def batch_processor():
                         lines = [line.strip() for line in f if line.strip()]
                         for i, h in enumerate(lines, 1):
                             print(f"  Hash {i}: {h}")
+                        task.hashes = lines
+                        combined_lines.extend(lines)
                 except Exception as e:
                     print(f"  [!] Could not read {task.file_path}: {e}")
-
-            combined_lines = []
-            for task in pending_files:
-                with open(task.file_path, 'r') as f:
-                    lines = [line.strip() for line in f if line.strip()]
-                    task.hashes = lines  # store for response
-                    combined_lines.extend(lines)
 
             with open(batch_input_file, 'w') as f:
                 for line in combined_lines:
@@ -168,12 +165,10 @@ def batch_processor():
                 WORDLIST_PATH,
                 "-r", RULE_FILE,
                 "-o", CRACKED_PASSWORDS_FILE,
-                "--outfile-format=1",
                 "--potfile-disable",
                 "--force",
                 "-O",
                 "-w", "3",
-
             ]
 
             print(f"[***] Running hashcat on batch...")
@@ -183,7 +178,7 @@ def batch_processor():
                     hashcat_cmd,
                     cwd=HASHCAT_DIR,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,  # Merge stdout and stderr
+                    stderr=subprocess.STDOUT,
                     text=True
                 )
 
@@ -212,17 +207,7 @@ def batch_processor():
 
             # Parse cracked results
             cracked_results = {}
-            if os.path.exists(batch_output_file):
-                with open(batch_output_file, 'r') as f:
-                    for line in f:
-                        if ':' in line:
-                            parts = line.strip().split(':')
-                            if len(parts) >= 3:
-                                email = parts[0]
-                                password = parts[-1]
-                                cracked_results[email] = password
-                                with open(CRACKED_PASSWORDS_FILE, 'a') as cfile:
-                                    cfile.write(f"{email}:{password}\n")
+
 
             # Update task results
             for task in pending_files:
@@ -241,7 +226,6 @@ def batch_processor():
                     "results": cracked
                 }
 
-                # Clean up file
                 try:
                     os.remove(task.file_path)
                 except Exception as e:
@@ -249,6 +233,7 @@ def batch_processor():
 
             pending_files.clear()
             print(f"[===] Batch complete: {len(cracked_results)} cracked")
+
 
 if __name__ == '__main__':
     threading.Thread(target=batch_processor, daemon=True).start()
