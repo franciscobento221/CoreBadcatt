@@ -5,6 +5,7 @@ import threading
 import queue
 import uuid
 from datetime import datetime
+from werkzeug.utils import secure_filename
 #push
 
 app = Flask(__name__)
@@ -23,7 +24,7 @@ active_tasks = {}
 
 pending_files = []
 batch_lock = threading.Lock()
-BATCH_INTERVAL_SECONDS = 120  # 5 minutes
+BATCH_INTERVAL_SECONDS = 180  # 5 minutes
 
 
 class HashcatTask:
@@ -59,22 +60,31 @@ def upload_file():
     if not uploaded_file.filename.endswith('.txt'):
         return jsonify({"error": "Only .txt files are accepted"}), 400
 
-    # Save the uploaded file
-    file_path = os.path.join(HASHCAT_DIR, f"hashes_{str(uuid.uuid4())}.txt")
+    # Save to Empresas folder using the original filename (safely)
+    original_filename = secure_filename(uploaded_file.filename)
+    empresas_dir = os.path.join(HASHCAT_DIR, "Empresas")
+    os.makedirs(empresas_dir, exist_ok=True)  # Ensure the folder exists
+
+    file_path = os.path.join(empresas_dir, original_filename)
     uploaded_file.save(file_path)
 
-    # Create task metadata (not yet processed)
-    task = HashcatTask(file_path, uploaded_file.filename)
+    # Force immediate disk write
+    with open(file_path, 'a') as f:
+        f.flush()
+        os.fsync(f.fileno())
+
+    # Create task metadata
+    task = HashcatTask(file_path, original_filename)
 
     with batch_lock:
         pending_files.append(task)
         active_tasks[task.task_id] = task
 
-    print(f"\n[+++] File queued for batch: {uploaded_file.filename}")
+    print(f"\n[+++] File saved to Empresas and queued: {original_filename}")
     return jsonify({
         "status": "queued_for_batch",
         "task_id": task.task_id,
-        "filename": uploaded_file.filename
+        "filename": original_filename
     })
 
 
@@ -161,11 +171,13 @@ def batch_processor():
                 "-m", "0",
                 "-a", "0",
                 "--username",
+               #"--show",
                 batch_input_file,
                 WORDLIST_PATH,
                 "-r", RULE_FILE,
                 "-o", CRACKED_PASSWORDS_FILE,
                 "--potfile-disable",
+                "--outfile-format=1",
                 "--force",
                 "-O",
                 "-w", "3",
