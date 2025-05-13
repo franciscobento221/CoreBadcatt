@@ -14,13 +14,13 @@ USERS = {
     "user2@estg.pt": {"password": "user456", "role": "user"},
     "user3@sad.pt": {"password": "user456", "role": "admin"},
 
-    "adminX@domain.com": {"password": "admin123", "role": "admin"},
-    "adminY@domain.com": {"password": "admin123", "role": "admin"},
-    "adminZ@domain.com": {"password": "admin123", "role": "admin"},
+    "admin@domainx.com": {"password": "admin123", "role": "admin"},
+    "admin@domainy.com": {"password": "admin123", "role": "admin"},
+    "admin@domainz.com": {"password": "admin123", "role": "admin"},
 
-    "userX@domain.com": {"password": "user123", "role": "user"},
-    "userY@domain.com": {"password": "user123", "role": "user"},
-    "userZ@domain.com": {"password": "user123", "role": "user"},
+    "user@domainx.com": {"password": "user123", "role": "user"},
+    "user@domainy.com": {"password": "user123", "role": "user"},
+    "user@domainz.com": {"password": "user123", "role": "user"},
 
 
 
@@ -101,9 +101,35 @@ def check_cracked():
 
         return jsonify({"status": "cracked", "updated_lines": len(updated_lines)})
 
+
+
     except Exception as e:
         return jsonify({"error": f"Failed to update cracked file: {e}"}), 500
 
+@app.route('/get_hashes_by_domain', methods=['POST'])
+def get_hashes_by_domain():
+    data = request.get_json()
+    username = data.get("username")
+
+    if not username or "@" not in username:
+        return jsonify({"error": "Invalid username"}), 400
+
+    domain = username.split("@")[1].lower()
+    if not os.path.exists(CRACKED_PASSWORDS_FILE):
+        return jsonify({"error": "File not found"}), 500
+
+    matches = []
+    try:
+        with open(CRACKED_PASSWORDS_FILE, "r") as f:
+            for line in f:
+                if line.strip() and "@" in line:
+                    email, hashval = line.strip().split(":", 1)
+                    if email.endswith("@" + domain):
+                        matches.append({"email": email, "hash": hashval})
+
+        return jsonify({"results": matches})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == '__main__':

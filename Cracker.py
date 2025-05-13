@@ -6,14 +6,25 @@ import queue
 import uuid
 from datetime import datetime
 from werkzeug.utils import secure_filename
+import configparser
 #push
 
 app = Flask(__name__)
 
 # Configuration
 HASHCAT_DIR = r"C:\Users\Public\Documents\ServidorCORE\hashcat-6.2.6"
-WORDLIST_PATH = os.path.join(HASHCAT_DIR, "wordlist", "rockyou.list")
-RULE_FILE = os.path.join(HASHCAT_DIR, "rules", "best64.rule")
+config_path = os.path.join(HASHCAT_DIR, 'config.ini')
+config = configparser.ConfigParser()
+read_files = config.read(config_path)
+
+if not read_files:
+    print("[ERROR] Config file not found or unreadable:", config_path)
+else:
+    print(f"[INFO] Loaded config from {read_files[0]}")
+
+WORDLIST_PATH = config.get('hashcat', 'wordlist_path', fallback=os.path.join(HASHCAT_DIR, "wordlist", "rockyou.list"))
+RULE_FILE = config.get('hashcat', 'rule_file', fallback=os.path.join(HASHCAT_DIR, "rules", "best64.rule"))
+BATCH_INTERVAL_SECONDS = config.getint('hashcat', 'batch_interval_seconds', fallback=10)
 CRACKED_PASSWORDS_FILE = os.path.join(HASHCAT_DIR, "all_cracked_hashes.txt")
 
 
@@ -24,7 +35,7 @@ active_tasks = {}
 
 pending_files = []
 batch_lock = threading.Lock()
-BATCH_INTERVAL_SECONDS = 180  # 5 minutes
+#BATCH_INTERVAL_SECONDS = 180  # 5 minutes
 
 
 class HashcatTask:
