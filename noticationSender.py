@@ -131,6 +131,36 @@ def get_hashes_by_domain():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/upload_weak_passwords', methods=['POST'])
+def upload_weak_passwords():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "Empty filename"}), 400
+
+    try:
+        # Caminho do dicionário principal
+        DICTIONARIO_PATH = os.path.join(HASHCAT_DIR, "wordlist", "rockyou.list")
+        os.makedirs(os.path.dirname(DICTIONARIO_PATH), exist_ok=True)
+
+        # Ler linhas do ficheiro enviado
+        lines = file.read().decode('utf-8').splitlines()
+
+        # Fazer append ao dicionário
+        with open(DICTIONARIO_PATH, "a", encoding='utf-8') as dict_file:
+            for line in lines:
+                cleaned = line.strip()
+                if cleaned:
+                    dict_file.write(cleaned + "\n")
+
+        return jsonify({"status": "success", "added": len(lines)}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5050, threaded=True)
