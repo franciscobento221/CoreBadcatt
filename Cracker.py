@@ -249,10 +249,11 @@ def batch_processor():
                     "results": cracked
                 }
 
-                try:
-                    os.remove(task.file_path)
-                except Exception as e:
-                    print(f"[Cleanup Error] {e}")
+                # try:
+                #     os.remove(task.file_path)
+                # except Exception as e:
+                #     print(f"[Cleanup Error] {e}")
+                print(f"[INFO] File kept: {task.file_path}")
 
             pending_files.clear()
             print(f"[===] Batch complete: {len(cracked_results)} cracked")

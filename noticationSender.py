@@ -115,21 +115,66 @@ def get_hashes_by_domain():
         return jsonify({"error": "Invalid username"}), 400
 
     domain = username.split("@")[1].lower()
-    if not os.path.exists(CRACKED_PASSWORDS_FILE):
-        return jsonify({"error": "File not found"}), 500
 
+    empresas_dir = os.path.join(HASHCAT_DIR, "Empresas")
+    if not os.path.exists(empresas_dir):
+        return jsonify({"error": "Empresas folder not found"}), 500
+
+    # Step 1: Map hashes to users from Empresas
+    hash_to_user = {}
+    for filename in os.listdir(empresas_dir):
+        if filename.endswith(".txt"):
+            file_path = os.path.join(empresas_dir, filename)
+            try:
+                with open(file_path, "r") as f:
+                    for line in f:
+                        parts = line.strip().split(":", 1)
+                        if len(parts) == 2:
+                            user, hash_val = parts
+                            if hash_val not in hash_to_user:
+                                hash_to_user[hash_val] = user
+            except Exception:
+                continue
+
+    # Step 2: Update cracked file with usernames
+    if not os.path.exists(CRACKED_PASSWORDS_FILE):
+        return jsonify({"error": "Cracked password file not found"}), 500
+
+    try:
+        updated_lines = set()
+        with open(CRACKED_PASSWORDS_FILE, "r") as f:
+            for line in f:
+                raw = line.strip()
+                if not raw:
+                    continue
+                if ":" in raw:
+                    updated_lines.add(raw)
+                elif raw in hash_to_user:
+                    updated_lines.add(f"{hash_to_user[raw]}:{raw}")
+                else:
+                    updated_lines.add(raw)
+
+        with open(CRACKED_PASSWORDS_FILE, "w") as f:
+            for line in sorted(updated_lines):
+                f.write(line + "\n")
+    except Exception as e:
+        return jsonify({"error": f"Failed to update cracked file: {e}"}), 500
+
+    # Step 3: Return only matching domain hashes
     matches = []
     try:
         with open(CRACKED_PASSWORDS_FILE, "r") as f:
             for line in f:
                 if line.strip() and "@" in line:
                     email, hashval = line.strip().split(":", 1)
-                    if email.endswith("@" + domain):
+                    if email.lower().endswith("@" + domain):
                         matches.append({"email": email, "hash": hashval})
 
         return jsonify({"results": matches})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
 
 @app.route('/upload_weak_passwords', methods=['POST'])
 def upload_weak_passwords():
