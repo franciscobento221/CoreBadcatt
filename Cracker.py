@@ -7,12 +7,12 @@ import uuid
 from datetime import datetime
 from werkzeug.utils import secure_filename
 import configparser
-#push
+
 
 app = Flask(__name__)
 
 # Configuration
-HASHCAT_DIR = r"C:\Users\Public\Documents\ServidorCORE\hashcat-6.2.6"
+HASHCAT_DIR = r"C:\Users\Public\Documents\ServidorCORE\hashcat-6.2.6" #ALTERAR PARA SITIO ONDE ESTEJA A PASTA COM O HASHCAT
 config_path = os.path.join(HASHCAT_DIR, 'config.ini')
 config = configparser.ConfigParser()
 read_files = config.read(config_path)
@@ -28,7 +28,7 @@ BATCH_INTERVAL_SECONDS = config.getint('hashcat', 'batch_interval_seconds', fall
 CRACKED_PASSWORDS_FILE = os.path.join(HASHCAT_DIR, "all_cracked_hashes.txt")
 
 
-# Task queue and processing system
+
 task_queue = queue.Queue()
 processing_lock = threading.Lock()
 active_tasks = {}
@@ -51,7 +51,7 @@ class HashcatTask:
         self.current_hash = None
         self.hashes = []
 
-        # Read and log all hashes when task is created
+
         with open(file_path, 'r') as f:
             self.hashes = [line.strip() for line in f if line.strip()]
         print(f"\n[+++] {len(self.hashes)} hashes from {original_filename}")
@@ -59,6 +59,7 @@ class HashcatTask:
             print(f"  Hash {i}: {hash}")
 
 
+#UPLOAD DO EDGE
 @app.route('/upload', methods=['POST'])
 def upload_file():
     if 'file' not in request.files:
@@ -71,7 +72,7 @@ def upload_file():
     if not uploaded_file.filename.endswith('.txt'):
         return jsonify({"error": "Only .txt files are accepted"}), 400
 
-    # Save to Empresas folder using the original filename (safely)
+
     original_filename = secure_filename(uploaded_file.filename)
     empresas_dir = os.path.join(HASHCAT_DIR, "Empresas")
     os.makedirs(empresas_dir, exist_ok=True)  # Ensure the folder exists
@@ -79,12 +80,12 @@ def upload_file():
     file_path = os.path.join(empresas_dir, original_filename)
     uploaded_file.save(file_path)
 
-    # Force immediate disk write
+
     with open(file_path, 'a') as f:
         f.flush()
         os.fsync(f.fileno())
 
-    # Create task metadata
+
     task = HashcatTask(file_path, original_filename)
 
     with batch_lock:
@@ -122,7 +123,7 @@ def get_status(task_id):
 
     return jsonify(response)
 
-
+#METODO BATCHING
 @app.route('/queue', methods=['GET'])
 def get_queue():
     with processing_lock:
@@ -176,7 +177,7 @@ def batch_processor():
                 for line in combined_lines:
                     f.write(line + "\n")
 
-            # Run hashcat
+
             hashcat_cmd = [
                 os.path.join(HASHCAT_DIR, "hashcat.exe"),
                 "-m", "0",
@@ -228,11 +229,11 @@ def batch_processor():
                 pending_files.clear()
                 continue
 
-            # Parse cracked results
+
             cracked_results = {}
 
 
-            # Update task results
+
             for task in pending_files:
                 cracked = []
                 for hash in task.hashes:
@@ -256,7 +257,7 @@ def batch_processor():
                 print(f"[INFO] File kept: {task.file_path}")
 
             pending_files.clear()
-            print(f"[===] Batch complete: {len(cracked_results)} cracked")
+
 
 
 if __name__ == '__main__':

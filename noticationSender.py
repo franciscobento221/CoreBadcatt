@@ -1,11 +1,10 @@
 from flask import Flask, request, jsonify
 import os
 
-#push
-#teste push
+
 app = Flask(__name__)
 
-# Hardcoded users (username: {password, role})
+# HARDCODED USERS
 USERS = {
     "admin@estg.pt": {"password": "admin123", "role": "admin"},
     "admin@esecs.pt": {"password": "admin123", "role": "admin"},
@@ -26,10 +25,10 @@ USERS = {
 
 }
 
-HASHCAT_DIR = r"C:\Users\Public\Documents\ServidorCORE\hashcat-6.2.6"
+HASHCAT_DIR = r"C:\Users\Public\Documents\ServidorCORE\hashcat-6.2.6"  #ALTERAR PARA SITIO ONDE ESTEJA A PASTA COM O HASHCAT
 CRACKED_PASSWORDS_FILE = os.path.join(HASHCAT_DIR, "all_cracked_hashes.txt")
 
-
+#LOGIN
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
@@ -47,7 +46,7 @@ def login():
     return jsonify({"status": "fail", "message": "Invalid credentials"}), 401
 
 
-
+#FAZER UPDATE À LISTA DE HASHES DECIFRADAS
 @app.route('/check', methods=['POST'])
 def check_cracked():
     data = request.get_json()
@@ -60,7 +59,6 @@ def check_cracked():
     if not os.path.exists(empresas_dir):
         return jsonify({"error": "Empresas folder not found"}), 500
 
-    # Step 1: Build hash -> user mapping from Empresas folder
     hash_to_user = {}
     for filename in os.listdir(empresas_dir):
         if not filename.endswith(".txt"):
@@ -77,7 +75,6 @@ def check_cracked():
         except Exception as e:
             continue
 
-    # Step 2: Load all_cracked_hashes.txt, replace hashes with user:hash if available
     if not os.path.exists(CRACKED_PASSWORDS_FILE):
         return jsonify({"error": "Cracked password file not found"}), 500
 
@@ -99,13 +96,21 @@ def check_cracked():
             for line in sorted(updated_lines):
                 f.write(line + "\n")
 
-        return jsonify({"status": "cracked", "updated_lines": len(updated_lines)})
+        cracked_count = sum(1 for line in updated_lines if ":" in line)
+
+        if cracked_count > 0:
+            return jsonify({"status": "cracked", "cracked_hashes": cracked_count})
+        else:
+            return jsonify({"status": "not_cracked", "cracked_hashes": 0})
 
 
 
     except Exception as e:
         return jsonify({"error": f"Failed to update cracked file: {e}"}), 500
 
+
+
+#FAZER FILE COM OS USERS QUE TIVERAM HASH DECIFRADA
 @app.route('/get_hashes_by_domain', methods=['POST'])
 def get_hashes_by_domain():
     data = request.get_json()
@@ -120,7 +125,6 @@ def get_hashes_by_domain():
     if not os.path.exists(empresas_dir):
         return jsonify({"error": "Empresas folder not found"}), 500
 
-    # Step 1: Map hashes to users from Empresas
     hash_to_user = {}
     for filename in os.listdir(empresas_dir):
         if filename.endswith(".txt"):
@@ -136,7 +140,6 @@ def get_hashes_by_domain():
             except Exception:
                 continue
 
-    # Step 2: Update cracked file with usernames
     if not os.path.exists(CRACKED_PASSWORDS_FILE):
         return jsonify({"error": "Cracked password file not found"}), 500
 
@@ -160,7 +163,6 @@ def get_hashes_by_domain():
     except Exception as e:
         return jsonify({"error": f"Failed to update cracked file: {e}"}), 500
 
-    # Step 3: Return only matching domain hashes
     matches = []
     try:
         with open(CRACKED_PASSWORDS_FILE, "r") as f:
@@ -176,6 +178,7 @@ def get_hashes_by_domain():
 
 
 
+#PARA ADICIONAR PALAVRAS AO DICIONARIO
 @app.route('/upload_weak_passwords', methods=['POST'])
 def upload_weak_passwords():
     if 'file' not in request.files:
@@ -186,14 +189,11 @@ def upload_weak_passwords():
         return jsonify({"error": "Empty filename"}), 400
 
     try:
-        # Caminho do dicionário principal
         DICTIONARIO_PATH = os.path.join(HASHCAT_DIR, "wordlist", "rockyou.list")
         os.makedirs(os.path.dirname(DICTIONARIO_PATH), exist_ok=True)
 
-        # Ler linhas do ficheiro enviado
         lines = file.read().decode('utf-8').splitlines()
 
-        # Fazer append ao dicionário
         with open(DICTIONARIO_PATH, "a", encoding='utf-8') as dict_file:
             for line in lines:
                 cleaned = line.strip()
